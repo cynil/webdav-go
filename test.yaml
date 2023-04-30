@@ -1,0 +1,47 @@
+# Server related settings
+address: 0.0.0.0
+port: 13655
+auth: true
+tls: false
+prefix: /
+debug: false
+
+# Default user settings (will be merged)
+scope: .
+modify: true
+rules: []
+
+# CORS configuration
+cors:
+  enabled: true
+  credentials: true
+  allowed_headers: 
+    - "*"
+  allowed_hosts:
+    - "*"
+  allowed_methods:
+    - "*"
+  exposed_headers:
+    - Content-Length
+
+users:
+  - username: user0
+    password: user1
+    scope: /home/dav/share1/
+  - username: user1
+    password: user1
+    scope: /home/dav/share1/
+
+  # - username: encrypted
+  #   password: "{bcrypt}$2y$10$zEP6oofmXFeHaeMfBNLnP.DO8m.H.Mwhd24/TOX2MWLxAExXi4qgi"
+  # - username: "{env}ENV_USERNAME"
+  #   password: "{env}ENV_PASSWORD"
+  # - username: basic
+  #   password: basic
+  #   modify:   false
+  #   rules:
+  #     - regex: false
+  #       allow: false
+  #       path: /some/file
+  #     - path: /public/access/
+  #       modify: true

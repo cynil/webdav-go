@@ -45,6 +45,10 @@ cors:
     - Content-Length
     - Content-Range
 
+dirs:
+  - scope: /a/different/path
+  - users: [admin, user1]
+
 users:
   - username: admin
     password: admin

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"log"
 	"os"
-	"regexp"
+
 	"strconv"
 	"strings"
 
@@ -13,51 +13,6 @@ import (
 	v "github.com/spf13/viper"
 	"golang.org/x/net/webdav"
 )
-
-func parseRules(raw []interface{}, defaultModify bool) []*lib.Rule {
-	rules := []*lib.Rule{}
-
-	for _, v := range raw {
-		if r, ok := v.(map[interface{}]interface{}); ok {
-			rule := &lib.Rule{
-				Regex:  false,
-				Allow:  false,
-				Modify: defaultModify,
-				Path:   "",
-			}
-
-			if regex, ok := r["regex"].(bool); ok {
-				rule.Regex = regex
-			}
-
-			if allow, ok := r["allow"].(bool); ok {
-				rule.Allow = allow
-			}
-
-			if modify, ok := r["modify"].(bool); ok {
-				rule.Modify = modify
-				if modify {
-					rule.Allow = true
-				}
-			}
-
-			path, ok := r["path"].(string)
-			if !ok {
-				continue
-			}
-
-			if rule.Regex {
-				rule.Regexp = regexp.MustCompile(path)
-			} else {
-				rule.Path = path
-			}
-
-			rules = append(rules, rule)
-		}
-	}
-
-	return rules
-}
 
 func loadFromEnv(v string) (string, error) {
 	v = strings.TrimPrefix(v, "{env}")
@@ -71,6 +26,67 @@ func loadFromEnv(v string) (string, error) {
 	}
 
 	return v, nil
+}
+
+func parseDirs(raw []interface{}, c *lib.Config) {
+	for _, v := range raw {
+		if r, ok := v.(map[interface{}]interface{}); ok {
+			share := &lib.Share{
+				Name:  "",
+				Scope: "",
+				Users: map[string]*lib.User{},
+			}
+
+			if name, ok := r["name"].(string); ok {
+				share.Name = name
+			}
+
+			if scope, ok := r["scope"].(string); ok {
+				share.Scope = scope
+			}
+
+			if share.Name == "" {
+				share.Name = share.Scope
+			}
+
+			if users, ok := r["users"].([]interface{}); ok {
+				for _, item := range users {
+					if user, ok := item.(map[interface{}]interface{}); ok {
+
+						username, ok := user["username"].(string)
+						if !ok {
+							log.Fatal("user needs an username")
+						}
+
+						modify, ok := user["modify"].(bool)
+						if !ok {
+							modify = false
+						}
+
+						if user, ok := c.Users[username]; ok {
+							shareUser := &lib.User{
+								Username: user.Username,
+								Password: user.Password,
+								Modify:   modify,
+							}
+							share.Users[username] = shareUser
+						}
+					}
+				}
+			}
+
+			share.Handler = &webdav.Handler{
+				Prefix: share.Scope,
+				FileSystem: lib.WebDavDir{
+					Dir:     webdav.Dir(share.Scope),
+					NoSniff: c.NoSniff,
+				},
+				LockSystem: webdav.NewMemLS(),
+			}
+
+			c.Dirs = append(c.Dirs, share)
+		}
+	}
 }
 
 func parseUsers(raw []interface{}, c *lib.Config) {
@@ -101,33 +117,19 @@ func parseUsers(raw []interface{}, c *lib.Config) {
 				checkErr(err)
 			}
 
+			modify, ok := u["modify"].(bool)
+			if !ok {
+				modify = false
+			}
+
 			user := &lib.User{
 				Username: username,
 				Password: password,
-				Scope:    c.User.Scope,
-				Modify:   c.User.Modify,
-				Rules:    c.User.Rules,
-			}
-
-			if scope, ok := u["scope"].(string); ok {
-				user.Scope = scope
+				Modify:   modify,
 			}
 
 			if modify, ok := u["modify"].(bool); ok {
 				user.Modify = modify
-			}
-
-			if rules, ok := u["rules"].([]interface{}); ok {
-				user.Rules = append(c.User.Rules, parseRules(rules, user.Modify)...)
-			}
-
-			user.Handler = &webdav.Handler{
-				Prefix: c.User.Handler.Prefix,
-				FileSystem: lib.WebDavDir{
-					Dir:     webdav.Dir(user.Scope),
-					NoSniff: c.NoSniff,
-				},
-				LockSystem: webdav.NewMemLS(),
 			}
 
 			c.Users[username] = user
@@ -176,23 +178,13 @@ func corsProperty(property string, cfg map[string]interface{}) []string {
 }
 
 func readConfig(flags *pflag.FlagSet) *lib.Config {
+	// zlj
 	cfg := &lib.Config{
-		User: &lib.User{
-			Scope:  getOpt(flags, "scope"),
-			Modify: getOptB(flags, "modify"),
-			Rules:  []*lib.Rule{},
-			Handler: &webdav.Handler{
-				Prefix: getOpt(flags, "prefix"),
-				FileSystem: lib.WebDavDir{
-					Dir:     webdav.Dir(getOpt(flags, "scope")),
-					NoSniff: getOptB(flags, "nosniff"),
-				},
-				LockSystem: webdav.NewMemLS(),
-			},
-		},
+		Prefix:  getOpt(flags, "prefix"),
 		Debug:   getOptB(flags, "debug"),
 		Auth:    getOptB(flags, "auth"),
 		NoSniff: getOptB(flags, "nosniff"),
+		Tmpl:    getOpt(flags, "template"),
 		Cors: lib.CorsCfg{
 			Enabled:     false,
 			Credentials: false,
@@ -201,14 +193,14 @@ func readConfig(flags *pflag.FlagSet) *lib.Config {
 		LogFormat: getOpt(flags, "log_format"),
 	}
 
-	rawRules := v.Get("rules")
-	if rules, ok := rawRules.([]interface{}); ok {
-		cfg.User.Rules = parseRules(rules, cfg.User.Modify)
-	}
-
 	rawUsers := v.Get("users")
 	if users, ok := rawUsers.([]interface{}); ok {
 		parseUsers(users, cfg)
+	}
+
+	rawDirs := v.Get("dirs")
+	if dirs, ok := rawDirs.([]interface{}); ok {
+		parseDirs(dirs, cfg)
 	}
 
 	rawCors := v.Get("cors")

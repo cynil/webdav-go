@@ -2,7 +2,12 @@ package lib
 
 import (
 	"context"
+	"fmt"
+	"html/template"
+	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"go.uber.org/zap"
@@ -20,18 +25,21 @@ type CorsCfg struct {
 
 // Config is the configuration of a WebDAV instance.
 type Config struct {
-	*User
+	// zlj
 	Auth      bool
 	Debug     bool
 	NoSniff   bool
+	Prefix    string
 	Cors      CorsCfg
+	Dirs      []*Share
 	Users     map[string]*User
 	LogFormat string
+	Tmpl      string
 }
 
-// ServeHTTP determines if the request is for this plugin, and if all prerequisites are met.
 func (c *Config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	u := c.User
+	var u = &User{"guest", "guest", false} // current user
+	var share *Share
 	requestOrigin := r.Header.Get("Origin")
 
 	// Add CORS headers before any operation so even on a 401 unauthorized status, CORS will work.
@@ -69,20 +77,32 @@ func (c *Config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	for _, d := range c.Dirs {
+		if strings.HasPrefix(r.URL.Path, filepath.Join(c.Prefix, d.Scope)) {
+			share = d
+			break
+		}
+	}
+
+	if share == nil {
+		http.Error(w, "Not Allowed", 403)
+		return
+	}
 	// Authentication
 	if c.Auth {
 		w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
 
 		// Gets the correct user for this request.
 		username, password, ok := r.BasicAuth()
-		zap.L().Info("login attempt", zap.String("username", username), zap.String("remote_address", r.RemoteAddr))
+		zap.L().Info("login attempt", zap.String("dir", share.Scope), zap.String("username", username), zap.String("remote_address", r.RemoteAddr))
 		if !ok {
 			http.Error(w, "Not authorized", 401)
 			return
 		}
 
-		user, ok := c.Users[username]
+		user, ok := share.Users[username]
 		if !ok {
+			fmt.Println(share.Users, username)
 			http.Error(w, "Not authorized", 401)
 			return
 		}
@@ -111,7 +131,9 @@ func (c *Config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	noModification := r.Method == "GET" || r.Method == "HEAD" ||
 		r.Method == "OPTIONS" || r.Method == "PROPFIND"
 
-	allowed := u.Allowed(r.URL.Path, noModification)
+	allowed := u.Allowed(noModification)
+	// modify := share.Users[u.Username].Modify
+	// allowed := noModification || modify
 
 	zap.L().Debug("allowed & method & path", zap.Bool("allowed", allowed), zap.String("method", r.Method), zap.String("path", r.URL.Path))
 
@@ -131,20 +153,39 @@ func (c *Config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//		the collection, or something else altogether.
 	//
 	// Get, when applied to collection, will return the same as PROPFIND method.
-	if r.Method == "GET" && strings.HasPrefix(r.URL.Path, u.Handler.Prefix) {
-		info, err := u.Handler.FileSystem.Stat(context.TODO(), strings.TrimPrefix(r.URL.Path, u.Handler.Prefix))
+	if r.Method == "GET" && strings.HasPrefix(r.URL.Path, share.Handler.Prefix) {
+		info, err := share.Handler.FileSystem.Stat(context.TODO(), strings.TrimPrefix(r.URL.Path, share.Handler.Prefix))
 		if err == nil && info.IsDir() {
-			r.Method = "PROPFIND"
+			// r.Method = "PROPFIND"
 
-			if r.Header.Get("Depth") == "" {
-				r.Header.Add("Depth", "1")
+			// if r.Header.Get("Depth") == "" {
+			// 	r.Header.Add("Depth", "1")
+			// }
+			f, err := share.Handler.FileSystem.OpenFile(context.TODO(), strings.TrimPrefix(r.URL.Path, share.Handler.Prefix), os.O_RDONLY, 0)
+			dirs, err := f.Readdir(-1)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
 			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			renderer := getHTMLRenderer(c.Tmpl)
+			fileView := &WebDAVFileView{
+				User:  u.Username,
+				Name:  share.Name,
+				Path:  share.Scope,
+				Items: getFilesInfo(dirs),
+			}
+
+			renderer.Execute(w, fileView)
+
+			return
 		}
 	}
 
 	// Runs the WebDAV.
 	//u.Handler.LockSystem = webdav.NewMemLS()
-	u.Handler.ServeHTTP(w, r)
+	fmt.Println(r.URL, r.Header.Get("Destination"))
+	share.Handler.ServeHTTP(w, r)
 }
 
 // responseWriterNoBody is a wrapper used to suprress the body of the response
@@ -171,4 +212,57 @@ func (w responseWriterNoBody) Write(data []byte) (int, error) {
 // WriteHeader writes the header to the http.ResponseWriter.
 func (w responseWriterNoBody) WriteHeader(statusCode int) {
 	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+type WebDAVFileView struct {
+	User  string
+	Items []*HtmlFileInfo
+	Path  string
+	Name  string
+}
+
+type HtmlFileInfo struct {
+	Name     string
+	Size     int64
+	ModeTime string
+	isDir    bool
+}
+
+func getFilesInfo(dirs []fs.FileInfo) []*HtmlFileInfo {
+	var files []*HtmlFileInfo
+	for _, d := range dirs {
+		item := &HtmlFileInfo{
+			isDir:    d.IsDir(),
+			ModeTime: d.ModTime().Local().String(),
+			Size:     d.Size(),
+		}
+
+		if item.isDir {
+			item.Name = d.Name() + "/"
+		} else {
+			item.Name = d.Name()
+		}
+
+		files = append(files, item)
+	}
+
+	return files
+}
+
+func getHTMLRenderer(filename string) *template.Template {
+	renderer, err := template.ParseFiles(filename)
+
+	if err != nil {
+		renderer = template.Must(template.New("config").Parse(`
+		  <div>
+			{{range .Items}}
+			  <div>
+				<a href="./{{.Name}}">{{.Name}}</a>
+			  </div>
+			{{end}}
+		  </div>
+		`))
+	}
+
+	return renderer
 }

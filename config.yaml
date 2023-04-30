@@ -1,0 +1,43 @@
+address: 0.0.0.0
+port: 5277
+auth: true
+tls: false
+prefix: /
+nosniff: false
+debug: false
+
+# CORS configuration
+cors:
+  enabled: true
+  credentials: true
+  allowed_headers:
+    - Depth
+  allowed_hosts:
+    - http://localhost:8080
+  allowed_methods:
+    - GET
+  exposed_headers:
+    - Content-Length
+    - Content-Range
+
+users:
+  - username: admin
+    password: crane277
+    modify: true
+  - username: user1
+    password: user1
+    modify: false
+
+dirs:
+  - name: share1
+    scope: /home/dav/share1
+    users: 
+    - username: admin
+      modify: true
+    - username: user1
+      modify: false
+  - name: a
+    scope: /home/dav/a
+    users:
+    - username: user1
+      modify: false

@@ -29,6 +29,7 @@ func init() {
 	flags.StringP("port", "p", "0", "port to listen to")
 	flags.StringP("prefix", "P", "/", "URL path prefix")
 	flags.String("log_format", "console", "logging format")
+	flags.StringP("template", "T", "/etc/webdav/config.html", "web template")
 }
 
 var rootCmd = &cobra.Command{

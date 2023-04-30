@@ -1,0 +1,6 @@
+#!/bin/bash
+
+chmod a+x /usr/bin/webdav
+systemctl daemon-reload
+# systemctl start webdav.service
+

@@ -1,0 +1,8 @@
+Package: webdav
+Version: 4.2.1
+Size: 2.9MB
+Architecture: amd64
+Maintainer: https://github.com/hacdias/webdav/
+Priority: optional
+Description: WebDAV Server
+
